@@ -21,7 +21,7 @@ Commands:
         ps aux | grep 'mlflow' | grep -v 'grep' | awk '{print $2}' | xargs kill -9
 """
 
-from ultralytics.utils import LOGGER, RUNS_DIR, SETTINGS, TESTS_RUNNING, colorstr
+from ultralytics.utils import LOGGER, RANK, RUNS_DIR, SETTINGS, TESTS_RUNNING, colorstr
 
 try:
     import os
@@ -132,6 +132,6 @@ callbacks = (
         "on_fit_epoch_end": on_fit_epoch_end,
         "on_train_end": on_train_end,
     }
-    if mlflow
+    if mlflow and RANK not in [-1, 0]
     else {}
 )

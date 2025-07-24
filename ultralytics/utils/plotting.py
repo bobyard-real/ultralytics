@@ -1059,7 +1059,7 @@ def plot_images(
                 boxes = bboxes[idx]
                 conf = confs[idx] if confs is not None else None  # check for confidence presence (label vs pred)
                 if len(boxes):
-                    if boxes[:, :4].max() <= 1.1:  # if normalized with tolerance 0.1
+                    if boxes[:, :4].max() <= 2.:  # if normalized with tolerance 0.1
                         boxes[..., [0, 2]] *= w  # scale to pixels
                         boxes[..., [1, 3]] *= h
                     elif scale < 1:  # absolute coords need scale if image scales

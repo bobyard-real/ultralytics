@@ -62,27 +62,70 @@ class Profile(contextlib.ContextDecorator):
         return time.time()
 
 
-def segment2box(segment, width=640, height=640):
+def segment2box(
+    segment: np.ndarray,
+    width: int = 640,
+    height: int = 640,
+    min_area_ratio: float = 0.10,
+) -> np.ndarray:
     """
-    Convert 1 segment label to 1 box label, applying inside-image constraint, i.e. (xy1, xy2, ...) to (xyxy).
-
-    Args:
-        segment (torch.Tensor): the segment label
-        width (int): the width of the image. Defaults to 640
-        height (int): The height of the image. Defaults to 640
-
-    Returns:
-        (np.ndarray): the minimum and maximum x and y values of the segment.
+    Ratio-aware conversion of a polygon *segment* (N×2) to a bounding box,
+    mirroring the logic in `process_coco_annotations`.
+    Returns
+    -------
+    np.ndarray
+        [x_min, y_min, x_max, y_max]  (same dtype as input)
+        or zeros if the object is rejected.
     """
-    x, y = segment.T  # segment xy
+    # ------------------------------------------------------------------ 1/6
+    # Co-ords & “inside-image” mask
+    x, y = segment.T
     inside = (x >= 0) & (y >= 0) & (x <= width) & (y <= height)
-    x = x[inside]
-    y = y[inside]
-    return (
-        np.array([x.min(), y.min(), x.max(), y.max()], dtype=segment.dtype)
-        if any(x)
-        else np.zeros(4, dtype=segment.dtype)
-    )  # xyxy
+    if not inside.any():            # completely outside
+        return np.zeros(4, dtype=segment.dtype)
+
+    # ------------------------------------------------------------------ 2/6
+    # Full & clipped bounding boxes
+    full_bbox   = np.array([x.min(), y.min(), x.max(), y.max()],
+                           dtype=segment.dtype)
+    x_in, y_in  = x[inside], y[inside]
+    inside_bbox = np.array([x_in.min(), y_in.min(), x_in.max(), y_in.max()],
+                           dtype=segment.dtype)
+
+    # ------------------------------------------------------------------ 3/6
+    # Shoelace area (robust if <3 vertices)
+    def _poly_area(px: np.ndarray, py: np.ndarray) -> float:
+        if len(px) < 3:                          # degenerate (line/point)
+            return 0.0
+        return 0.5 * abs(
+            np.dot(px, np.roll(py, -1)) - np.dot(py, np.roll(px, -1))
+        )
+
+    full_area   = _poly_area(x, y)
+    inside_area = _poly_area(x_in, y_in)
+    area_ratio  = inside_area / (full_area + 1e-9)   # safe divide
+
+    # ------------------------------------------------------------------ 4/6
+    # Aspect ratio of the original object
+    w, h = full_bbox[2] - full_bbox[0], full_bbox[3] - full_bbox[1]
+    if min(w, h) < 1e-6:                            # single-pixel stripe
+        return np.zeros(4, dtype=segment.dtype)
+    aspect_ratio = max(w, h) / min(w, h)
+
+    # ------------------------------------------------------------------ 5/6
+    # Decision tree (identical thresholds to process_coco_annotations)
+    if 1.00 <= aspect_ratio < 1.05:                 # almost square
+        return full_bbox if area_ratio >= 0.10 else np.zeros(4, dtype=segment.dtype)
+    if 1.05 <= aspect_ratio < 2.30:                 # moderately rectangular
+        if area_ratio >= 0.35:
+            return full_bbox
+        if area_ratio >= min_area_ratio:
+            return inside_bbox
+        return np.zeros(4, dtype=segment.dtype)
+    # Highly elongated -------------------------------------------------------
+    inside_w, inside_h = inside_bbox[2] - inside_bbox[0], inside_bbox[3] - inside_bbox[1]
+    inside_frac = inside_w / width if w > h else inside_h / height
+    return inside_bbox if inside_frac > 0.20 else np.zeros(4, dtype=segment.dtype)
 
 
 def scale_boxes(img1_shape, boxes, img0_shape, ratio_pad=None, padding=True, xywh=False):
@@ -323,6 +366,7 @@ def clip_boxes(boxes, shape):
     Returns:
         (torch.Tensor | numpy.ndarray): Clipped boxes
     """
+    return boxes
     if isinstance(boxes, torch.Tensor):  # faster individually (WARNING: inplace .clamp_() Apple MPS bug)
         boxes[..., 0] = boxes[..., 0].clamp(0, shape[1])  # x1
         boxes[..., 1] = boxes[..., 1].clamp(0, shape[0])  # y1
@@ -345,6 +389,7 @@ def clip_coords(coords, shape):
     Returns:
         (torch.Tensor | numpy.ndarray): Clipped coordinates
     """
+    return coords
     if isinstance(coords, torch.Tensor):  # faster individually (WARNING: inplace .clamp_() Apple MPS bug)
         coords[..., 0] = coords[..., 0].clamp(0, shape[1])  # x
         coords[..., 1] = coords[..., 1].clamp(0, shape[0])  # y
