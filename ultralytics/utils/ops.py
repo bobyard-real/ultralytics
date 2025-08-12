@@ -66,66 +66,50 @@ def segment2box(
     segment: np.ndarray,
     width: int = 640,
     height: int = 640,
-    min_area_ratio: float = 0.10,
 ) -> np.ndarray:
-    """
-    Ratio-aware conversion of a polygon *segment* (N×2) to a bounding box,
-    mirroring the logic in `process_coco_annotations`.
-    Returns
-    -------
-    np.ndarray
-        [x_min, y_min, x_max, y_max]  (same dtype as input)
-        or zeros if the object is rejected.
-    """
-    # ------------------------------------------------------------------ 1/6
-    # Co-ords & “inside-image” mask
     x, y = segment.T
     inside = (x >= 0) & (y >= 0) & (x <= width) & (y <= height)
-    if not inside.any():            # completely outside
+    if not inside.any():
         return np.zeros(4, dtype=segment.dtype)
 
-    # ------------------------------------------------------------------ 2/6
-    # Full & clipped bounding boxes
-    full_bbox   = np.array([x.min(), y.min(), x.max(), y.max()],
-                           dtype=segment.dtype)
     x_in, y_in  = x[inside], y[inside]
-    inside_bbox = np.array([x_in.min(), y_in.min(), x_in.max(), y_in.max()],
-                           dtype=segment.dtype)
 
-    # ------------------------------------------------------------------ 3/6
-    # Shoelace area (robust if <3 vertices)
     def _poly_area(px: np.ndarray, py: np.ndarray) -> float:
-        if len(px) < 3:                          # degenerate (line/point)
+        if len(px) < 3:
             return 0.0
         return 0.5 * abs(
             np.dot(px, np.roll(py, -1)) - np.dot(py, np.roll(px, -1))
         )
 
-    full_area   = _poly_area(x, y)
+    full_area = _poly_area(x, y)
     inside_area = _poly_area(x_in, y_in)
-    area_ratio  = inside_area / (full_area + 1e-9)   # safe divide
+    area_ratio = inside_area / (full_area + 1e-9)
 
-    # ------------------------------------------------------------------ 4/6
-    # Aspect ratio of the original object
+    full_bbox = np.array([x.min(), y.min(), x.max(), y.max()], dtype=segment.dtype)
+    inside_bbox = np.array([x_in.min(), y_in.min(), x_in.max(), y_in.max()], dtype=segment.dtype)
     w, h = full_bbox[2] - full_bbox[0], full_bbox[3] - full_bbox[1]
-    if min(w, h) < 1e-6:                            # single-pixel stripe
+    if min(w, h) < 1e-6:
         return np.zeros(4, dtype=segment.dtype)
     aspect_ratio = max(w, h) / min(w, h)
 
-    # ------------------------------------------------------------------ 5/6
-    # Decision tree (identical thresholds to process_coco_annotations)
-    if 1.00 <= aspect_ratio < 1.05:                 # almost square
-        return full_bbox if area_ratio >= 0.10 else np.zeros(4, dtype=segment.dtype)
-    if 1.05 <= aspect_ratio < 2.30:                 # moderately rectangular
-        if area_ratio >= 0.35:
+    if np.isclose(area_ratio, 1., atol=0.01):
+        return full_bbox
+    if 1.00 <= aspect_ratio < 1.05:
+        return full_bbox if area_ratio > 0.1 else np.zeros(4, dtype=segment.dtype)
+    elif 1.05 <= aspect_ratio < 2.3:
+        if area_ratio > 0.35:
             return full_bbox
-        if area_ratio >= min_area_ratio:
+        elif area_ratio > 0.1:
             return inside_bbox
-        return np.zeros(4, dtype=segment.dtype)
-    # Highly elongated -------------------------------------------------------
-    inside_w, inside_h = inside_bbox[2] - inside_bbox[0], inside_bbox[3] - inside_bbox[1]
-    inside_frac = inside_w / width if w > h else inside_h / height
-    return inside_bbox if inside_frac > 0.20 else np.zeros(4, dtype=segment.dtype)
+        else:
+            return np.zeros(4, dtype=segment.dtype)
+    else:
+        # during training slices are independent so we cannot distinguish corner slices
+        # so we cannot filter small segments in the first slice which are fully in the second slice
+        if inside_area > 5 * 5:
+            return np.zeros(4, dtype=segment.dtype)
+        else:
+            return np.zeros(4, dtype=segment.dtype)
 
 
 def scale_boxes(img1_shape, boxes, img0_shape, ratio_pad=None, padding=True, xywh=False):
