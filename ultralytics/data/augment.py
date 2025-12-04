@@ -1295,7 +1295,10 @@ class RandomPerspective:
         w1, h1 = box1[2] - box1[0], box1[3] - box1[1]
         w2, h2 = box2[2] - box2[0], box2[3] - box2[1]
         ar = np.maximum(w2 / (h2 + eps), h2 / (w2 + eps))  # aspect ratio
-        return (w2 > wh_thr) & (h2 > wh_thr) & (w2 * h2 / (w1 * h1 + eps) > area_thr) & (ar < ar_thr)  # candidates
+        # Filter boxes completely outside image boundaries (x1, y1, x2, y2 format)
+        # box2 is transposed: box2[0]=x1, box2[1]=y1, box2[2]=x2, box2[3]=y2
+        inside = (box2[2] > 0) & (box2[3] > 0) & (box2[0] < self.size[0]) & (box2[1] < self.size[1])
+        return (w2 > wh_thr) & (h2 > wh_thr) & (w2 * h2 / (w1 * h1 + eps) > area_thr) & (ar < ar_thr) & inside
 
 
 class RandomHSV:

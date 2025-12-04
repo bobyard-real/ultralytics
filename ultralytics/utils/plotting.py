@@ -4,8 +4,8 @@ import contextlib
 import math
 import warnings
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Union
 from textwrap import fill
+from typing import Callable, Dict, List, Optional, Union
 
 import cv2
 import matplotlib.pyplot as plt
@@ -1071,7 +1071,7 @@ def plot_images(
                 boxes = ops.xywhr2xyxyxyxy(boxes) if is_obb else ops.xywh2xyxy(boxes)
                 for j, box in enumerate(boxes.astype(np.int64).tolist()):
                     c = classes[j]
-                    color = colors(c)
+                    color = colors(i)  # color by image index instead of class
                     c = names.get(c, c) if names else c
                     if labels or conf[j] > conf_thres:
                         label = f"{c}" if labels else f"{c} {conf[j]:.1f}"
@@ -1079,7 +1079,7 @@ def plot_images(
 
             elif len(classes):
                 for c in classes:
-                    color = colors(c)
+                    color = colors(i)  # color by image index instead of class
                     c = names.get(c, c) if names else c
                     annotator.text((x, y), f"{c}", txt_color=color, box_style=True)
 
@@ -1112,7 +1112,7 @@ def plot_images(
                 im = np.asarray(annotator.im).copy()
                 for j in range(len(image_masks)):
                     if labels or conf[j] > conf_thres:
-                        color = colors(classes[j])
+                        color = colors(i)  # color by image index instead of class
                         mh, mw = image_masks[j].shape
                         if mh != h or mw != w:
                             mask = image_masks[j].astype(np.uint8)
