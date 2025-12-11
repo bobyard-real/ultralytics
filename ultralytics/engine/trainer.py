@@ -360,6 +360,15 @@ class BaseTrainer:
                 self._close_dataloader_mosaic()
                 self.train_loader.reset()
 
+            # after _close_dataloader_mosaic
+            for t in self.train_loader.dataset.transforms.tolist():
+                t.current_epoch = epoch + 1
+                t.total_epochs = self.epochs
+                if hasattr(t, 'transforms'):
+                    for t1 in t.transforms:
+                        t1.current_epoch = epoch + 1
+                        t1.total_epochs = self.epochs
+
             if RANK in {-1, 0}:
                 LOGGER.info(self.progress_string())
                 pbar = TQDM(enumerate(self.train_loader), total=nb)

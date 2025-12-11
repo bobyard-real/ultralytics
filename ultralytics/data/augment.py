@@ -1794,6 +1794,7 @@ class Albumentations:
         prefix = colorstr("albumentations: ")
 
         try:
+            raise
             import albumentations as A
 
             check_version(A.__version__, "1.0.3", hard=True)  # version requirement
