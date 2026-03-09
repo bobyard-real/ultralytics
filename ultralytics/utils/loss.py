@@ -650,7 +650,6 @@ class v8OBBLoss(v8DetectionLoss):
         pred_scores = pred_scores.permute(0, 2, 1).contiguous()
         pred_distri = pred_distri.permute(0, 2, 1).contiguous()
         pred_angle = pred_angle.permute(0, 2, 1).contiguous()
-        pred_angle = pred_angle * 0  # Force angle to 0 for axis-aligned boxes
 
         dtype = pred_scores.dtype
         imgsz = torch.tensor(feats[0].shape[2:], device=self.device, dtype=dtype) * self.stride[0]  # image size (h,w)
@@ -664,7 +663,6 @@ class v8OBBLoss(v8DetectionLoss):
             targets = targets[(rw >= 2) & (rh >= 2)]  # filter rboxes of tiny size to stabilize training
             targets = self.preprocess(targets.to(self.device), batch_size, scale_tensor=imgsz[[1, 0, 1, 0]])
             gt_labels, gt_bboxes = targets.split((1, 5), 2)  # cls, xywhr
-            gt_bboxes[..., -1] = 0  # Force angle to 0 for axis-aligned boxes
             mask_gt = gt_bboxes.sum(2, keepdim=True).gt_(0.0)
         except RuntimeError as e:
             raise TypeError(
