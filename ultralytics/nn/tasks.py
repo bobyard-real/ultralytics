@@ -74,11 +74,13 @@ from ultralytics.utils.loss import (
 from ultralytics.utils.ops import make_divisible
 from ultralytics.utils.plotting import feature_visualization
 from ultralytics.utils.torch_utils import (
+    TTA_DEFAULT,
     fuse_conv_and_bn,
     fuse_deconv_and_bn,
     initialize_weights,
     intersect_dicts,
     model_info,
+    resolve_tta,
     scale_img,
     time_sync,
 )
@@ -118,14 +120,17 @@ class BaseModel(nn.Module):
             x (torch.Tensor): The input tensor to the model.
             profile (bool):  Print the computation time of each layer if True, defaults to False.
             visualize (bool): Save the feature maps of the model if True, defaults to False.
-            augment (bool): Augment image during prediction, defaults to False.
+            augment (bool | tuple | None): Test-time augmentation recipe. ``None``/``False`` disables TTA,
+                ``True`` uses the default ``([1, 0.83, 0.67], [None, 3, None])`` recipe, or pass a
+                ``(scales, flips)`` pair to specify custom views (flips: ``None``=no flip, ``2``=ud, ``3``=lr).
             embed (list, optional): A list of feature vectors/embeddings to return.
 
         Returns:
             (torch.Tensor): The last output of the model.
         """
+        augment = resolve_tta(augment)
         if augment:
-            return self._predict_augment(x)
+            return self._predict_augment(x, augment)
         return self._predict_once(x, profile, visualize, embed)
 
     def _predict_once(self, x, profile=False, visualize=False, embed=None):
@@ -157,11 +162,11 @@ class BaseModel(nn.Module):
                     return torch.unbind(torch.cat(embeddings, 1), dim=0)
         return x
 
-    def _predict_augment(self, x):
+    def _predict_augment(self, x, augment=None):
         """Perform augmentations on input image x and return augmented inference."""
         LOGGER.warning(
-            f"WARNING ⚠️ {self.__class__.__name__} does not support 'augment=True' prediction. "
-            f"Reverting to single-scale prediction."
+            f"WARNING ⚠️ {self.__class__.__name__} does not support augmented inference, "
+            f"reverting to single-scale prediction."
         )
         return self._predict_once(x)
 
@@ -344,21 +349,20 @@ class DetectionModel(BaseModel):
             self.info()
             LOGGER.info("")
 
-    def _predict_augment(self, x):
+    def _predict_augment(self, x, augment=None):
         """Perform augmentations on input image x and return augmented inference and train outputs."""
-        if getattr(self, "end2end", False) or self.__class__.__name__ != "DetectionModel":
-            LOGGER.warning("WARNING ⚠️ Model does not support 'augment=True', reverting to single-scale prediction.")
+        if getattr(self, "end2end", False) or self.__class__.__name__ not in {"DetectionModel", "OBBModel"}:
+            LOGGER.warning("WARNING ⚠️ Model does not support augmented inference, reverting to single-scale prediction.")
             return self._predict_once(x)
+        s, f = augment or TTA_DEFAULT  # scales, flips (2-ud, 3-lr)
         img_size = x.shape[-2:]  # height, width
-        s = [1, 0.83, 0.67]  # scales
-        f = [None, 3, None]  # flips (2-ud, 3-lr)
         y = []  # outputs
         for si, fi in zip(s, f):
             xi = scale_img(x.flip(fi) if fi else x, si, gs=int(self.stride.max()))
             yi = super().predict(xi)[0]  # forward
             yi = self._descale_pred(yi, fi, si, img_size)
             y.append(yi)
-        y = self._clip_augmented(y)  # clip augmented tails
+        y = self._clip_augmented(y, self.model[-1].nl)  # clip augmented tails
         return torch.cat(y, -1), None  # augmented inference, train
 
     @staticmethod
@@ -372,11 +376,10 @@ class DetectionModel(BaseModel):
             x = img_size[1] - x  # de-flip lr
         return torch.cat((x, y, wh, cls), dim)
 
-    def _clip_augmented(self, y):
-        """Clip YOLO augmented inference tails."""
-        nl = self.model[-1].nl  # number of detection layers (P3-P5)
+    @staticmethod
+    def _clip_augmented(y, nl=3, e=1):
+        """Clip YOLO augmented inference tails for `nl` detection layers (P3-P5), excluding `e` layers each side."""
         g = sum(4**x for x in range(nl))  # grid points
-        e = 1  # exclude layer count
         i = (y[0].shape[-1] // g) * sum(4**x for x in range(e))  # indices
         y[0] = y[0][..., :-i]  # large
         i = (y[-1].shape[-1] // g) * sum(4 ** (nl - 1 - x) for x in range(e))  # indices
@@ -398,6 +401,22 @@ class OBBModel(DetectionModel):
     def init_criterion(self):
         """Initialize the loss criterion for the model."""
         return v8OBBLoss(self)
+
+    @staticmethod
+    def _descale_pred(p, flips, scale, img_size, dim=1):
+        """De-scale OBB predictions, also un-flipping the trailing rotation channel.
+
+        OBB output channels are laid out as [xywh, classes, angle]. Isotropic resize
+        leaves the angle invariant; LR and UD flips both negate it (`θ' = -θ`, which
+        is equivalent to `π - θ` modulo π under the rotated-IoU symmetry used by NMS).
+        """
+        x, y, wh, cls, angle = p.split((1, 1, 2, p.shape[dim] - 5, 1), dim)
+        x, y, wh = x / scale, y / scale, wh / scale
+        if flips == 2:  # un-flip up-down
+            y, angle = img_size[0] - y, -angle
+        elif flips == 3:  # un-flip left-right
+            x, angle = img_size[1] - x, -angle
+        return torch.cat((x, y, wh, cls, angle), dim)
 
 
 class SegmentationModel(DetectionModel):

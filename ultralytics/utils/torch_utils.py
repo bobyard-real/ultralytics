@@ -444,6 +444,20 @@ def scale_img(img, ratio=1.0, same_shape=False, gs=32):
     return F.pad(img, [0, w - s[1], 0, h - s[0]], value=0.447)  # value = imagenet mean
 
 
+TTA_DEFAULT = ([1, 0.83, 0.67], [None, 3, None])  # default test-time augmentation (scales, flips: 2-ud, 3-lr)
+
+
+def resolve_tta(augment):
+    """Resolve `augment` into a `(scales, flips)` recipe tuple, or `None` to disable TTA.
+
+    Accepts ``None``/``False`` (off), ``True`` (default recipe), or a ``(scales, flips)`` pair
+    such as ``([1, 0.83, 0.67], [None, 3, None])`` for fully custom views.
+    """
+    if not augment:
+        return None
+    return TTA_DEFAULT if augment is True else augment
+
+
 def copy_attr(a, b, include=(), exclude=()):
     """Copies attributes from object 'b' to object 'a', with options to include/exclude certain attributes."""
     for k, v in b.__dict__.items():

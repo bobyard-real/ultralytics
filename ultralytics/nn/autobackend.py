@@ -17,6 +17,7 @@ from PIL import Image
 from ultralytics.utils import ARM64, IS_JETSON, IS_RASPBERRYPI, LINUX, LOGGER, ROOT, yaml_load
 from ultralytics.utils.checks import check_requirements, check_suffix, check_version, check_yaml
 from ultralytics.utils.downloads import attempt_download_asset, is_url
+from ultralytics.utils.torch_utils import resolve_tta
 
 
 def check_class_names(names):
@@ -438,13 +439,20 @@ class AutoBackend(nn.Module):
 
         Args:
             im (torch.Tensor): The image tensor to perform inference on.
-            augment (bool): whether to perform data augmentation during inference, defaults to False
+            augment (bool | tuple | None): Test-time augmentation recipe. ``None``/``False`` disables TTA,
+                ``True`` uses the default ``([1, 0.83, 0.67], [None, 3, None])`` recipe, or pass a
+                ``(scales, flips)`` pair for custom views (flips: ``None``=no flip, ``2``=ud, ``3``=lr).
             visualize (bool): whether to visualize the output predictions, defaults to False
             embed (list, optional): A list of feature vectors/embeddings to return.
 
         Returns:
             (tuple): Tuple containing the raw output tensor, and processed output for visualization (if visualize=True)
         """
+        # Test-time augmentation for non-PyTorch backends (PyTorch handles TTA inside the model)
+        augment = resolve_tta(augment)
+        if augment and not (self.pt or self.nn_module):
+            return self._augmented_forward(im, augment)
+
         b, ch, h, w = im.shape  # batch, channel, height, width
         if self.fp16 and im.dtype != torch.float16:
             im = im.half()  # to FP16
@@ -610,6 +618,35 @@ class AutoBackend(nn.Module):
             return self.from_numpy(y[0]) if len(y) == 1 else [self.from_numpy(x) for x in y]
         else:
             return self.from_numpy(y)
+
+    def _augmented_forward(self, im, augment):
+        """Run test-time augmentation for non-PyTorch backends.
+
+        Replays the given ``(scales, flips)`` TTA recipe by recursively calling ``self.forward`` with
+        ``augment=False`` for each view, then descales the predictions and clips augmented tails. Falls
+        back to a single-scale forward when the task is not detect/obb or the backend returns an
+        end-to-end output (last-dim==6).
+        """
+        from ultralytics.nn.tasks import DetectionModel, OBBModel  # local import to avoid circular dep
+        from ultralytics.utils.torch_utils import scale_img
+
+        if self.task not in {"detect", "obb"}:
+            LOGGER.warning(f"WARNING ⚠️ TTA not supported for task='{self.task}', reverting to single-scale prediction.")
+            return self.forward(im)
+
+        descale = OBBModel._descale_pred if self.task == "obb" else DetectionModel._descale_pred
+        img_size = im.shape[-2:]
+        gs = max(int(self.stride), 32)
+        y = []
+        for si, fi in zip(*augment):  # (scales, flips)
+            xi = scale_img(im.flip(fi) if fi else im, si, gs=gs, same_shape=True)  # same_shape: static-shape safe
+            yi = self.forward(xi)  # recurse with augment=False
+            yi = yi[0] if isinstance(yi, (list, tuple)) else yi
+            if yi.ndim != 3 or yi.shape[-1] == 6:  # end-to-end / unsupported layout: bail out to single-scale
+                LOGGER.warning("WARNING ⚠️ TTA not supported for end-to-end models, reverting to single-scale prediction.")
+                return self.forward(im)
+            y.append(descale(yi.float(), fi, si, img_size))
+        return torch.cat(DetectionModel._clip_augmented(y), -1)
 
     def from_numpy(self, x):
         """

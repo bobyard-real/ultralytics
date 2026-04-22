@@ -324,6 +324,8 @@ def check_cfg(cfg, hard=True):
                     )
                 cfg[k] = int(v)
             elif k in CFG_BOOL_KEYS and not isinstance(v, bool):
+                if k == "augment" and isinstance(v, (tuple, list)):
+                    continue  # `augment` accepts a `(scales, flips)` recipe in addition to bool
                 if hard:
                     raise TypeError(
                         f"'{k}={v}' is of invalid type {type(v).__name__}. "

@@ -42,6 +42,114 @@ def test_model_forward():
     model(source=None, imgsz=32, augment=True)  # also test no source and augment
 
 
+def test_resolve_tta():
+    """`resolve_tta` normalizes bool/None aliases and passes custom recipes through unchanged."""
+    from ultralytics.utils.torch_utils import TTA_DEFAULT, resolve_tta
+
+    assert resolve_tta(False) is None and resolve_tta(None) is None, "falsy values must disable TTA"
+    assert resolve_tta(True) is TTA_DEFAULT, "augment=True must alias to the default recipe"
+    custom = ([1, 0.5], [None, 3])
+    assert resolve_tta(custom) is custom, "tuple recipes must pass through unchanged"
+
+
+def test_obb_augment():
+    """Test TTA for OBB: descale geometry, channel layout, end-to-end predict, and custom recipes."""
+    from ultralytics.nn.tasks import OBBModel
+
+    # Unit: _descale_pred un-flips x/y and negates angle on flips, leaves angle invariant under pure resize
+    img_size = (320, 320)
+    p = torch.zeros(1, 6, 1)  # nc=1 -> channels = xywh(4) + nc(1) + angle(1) = 6
+    p[:, :4, 0] = torch.tensor([100.0, 50.0, 30.0, 20.0])
+    p[:, -1, 0] = 0.4  # rotation in radians
+    lr = OBBModel._descale_pred(p.clone(), flips=3, scale=1.0, img_size=img_size)
+    ud = OBBModel._descale_pred(p.clone(), flips=2, scale=1.0, img_size=img_size)
+    sc = OBBModel._descale_pred(p.clone(), flips=None, scale=0.5, img_size=img_size)
+    assert torch.allclose(lr[:, 0, 0], torch.tensor(220.0)), "LR flip must mirror x"
+    assert torch.allclose(lr[:, -1, 0], torch.tensor(-0.4)), "LR flip must negate angle"
+    assert torch.allclose(ud[:, 1, 0], torch.tensor(270.0)), "UD flip must mirror y"
+    assert torch.allclose(ud[:, -1, 0], torch.tensor(-0.4)), "UD flip must negate angle"
+    assert torch.allclose(sc[:, 0, 0], torch.tensor(200.0)), "Scale must descale xywh"
+    assert torch.allclose(sc[:, -1, 0], torch.tensor(0.4)), "Pure resize must leave angle invariant"
+
+    # Integration: TTA preserves the [xywh, classes, angle] channel layout and grows the anchor dim
+    obb = OBBModel(cfg="yolo11-obb.yaml", verbose=False).eval()
+    x = torch.zeros(1, 3, 32, 32)
+    with torch.inference_mode():
+        plain = obb(x, augment=None)  # None must behave like False
+        tta_bool = obb(x, augment=True)
+        tta_tuple = obb(x, augment=([1, 0.83, 0.67], [None, 3, None]))  # explicit default recipe
+        custom = obb(x, augment=([1, 0.83], [None, 2]))  # 2-view UD-flip recipe
+    plain_t = plain[0] if isinstance(plain, tuple) else plain
+    tta_bool_t = tta_bool[0] if isinstance(tta_bool, tuple) else tta_bool
+    tta_tuple_t = tta_tuple[0] if isinstance(tta_tuple, tuple) else tta_tuple
+    custom_t = custom[0] if isinstance(custom, tuple) else custom
+    nc = obb.model[-1].nc
+    assert plain_t.shape[1] == tta_bool_t.shape[1] == custom_t.shape[1] == 4 + nc + 1, "TTA must preserve OBB channels"
+    assert tta_bool_t.shape[2] > plain_t.shape[2], "TTA must yield more anchors than single-scale"
+    assert torch.equal(tta_bool_t, tta_tuple_t), "augment=True must equal the explicit default tuple recipe"
+
+    # End-to-end: full YOLO pipeline (incl. rotated NMS) runs for both bool and tuple augment forms
+    img = np.zeros((96, 96, 3), dtype=np.uint8)
+    model = YOLO("yolo11-obb.yaml", task="obb", verbose=False)
+    assert model.predict(img, imgsz=32, augment=True, verbose=False)[0].obb is not None
+    assert model.predict(img, imgsz=32, augment=([1, 0.83], [None, 3]), verbose=False)[0].obb is not None
+
+
+def test_augment_unsupported_fallback():
+    """Verify other DetectionModel subclasses still fall back to single-scale under augment=True."""
+    from ultralytics.nn.tasks import PoseModel, SegmentationModel
+
+    x = torch.zeros(1, 3, 32, 32)
+    for cls, cfg in [(SegmentationModel, "yolo11n-seg.yaml"), (PoseModel, "yolo11n-pose.yaml")]:
+        model = cls(cfg=cfg, verbose=False).eval()
+        with torch.inference_mode():
+            plain, tta = model(x, augment=False), model(x, augment=True)
+        plain_shape = (plain[0] if isinstance(plain, tuple) else plain).shape
+        tta_shape = (tta[0] if isinstance(tta, tuple) else tta).shape
+        assert plain_shape == tta_shape, f"{cls.__name__} should fall back to single-scale under augment=True"
+
+
+@pytest.mark.parametrize("task, cfg", [("detect", "yolo11n.yaml"), ("obb", "yolo11-obb.yaml")])
+def test_autobackend_augment_onnx(task, cfg):
+    """Test TTA through AutoBackend for ONNX-exported detect and OBB models, including a custom recipe."""
+    from ultralytics.nn.autobackend import AutoBackend
+
+    file = Path(YOLO(cfg, task=task, verbose=False).export(format="onnx", imgsz=64, dynamic=True, simplify=False))
+    try:
+        model = AutoBackend(file)
+        im = torch.zeros(1, 3, 64, 64)
+        plain = model.forward(im, augment=None)  # None must behave like False
+        tta_bool = model.forward(im, augment=True)
+        tta_tuple = model.forward(im, augment=([1, 0.83, 0.67], [None, 3, None]))  # explicit default recipe
+        custom = model.forward(im, augment=([1, 0.83], [None, 2]))  # 2-view UD-flip recipe
+        assert plain.shape[1] == tta_bool.shape[1] == custom.shape[1], "TTA must preserve channel layout"
+        assert tta_bool.shape[2] > plain.shape[2], "TTA must yield more anchors than single-scale"
+        assert torch.equal(tta_bool, tta_tuple), "augment=True must equal the explicit default tuple recipe"
+        # End-to-end YOLO API should accept both bool and tuple augment forms on the exported model
+        img = np.zeros((96, 96, 3), dtype=np.uint8)
+        bool_res = YOLO(file)(img, imgsz=64, augment=True, verbose=False)
+        tuple_res = YOLO(file)(img, imgsz=64, augment=([1, 0.83], [None, 3]), verbose=False)
+        for res in (bool_res, tuple_res):
+            assert (res[0].obb if task == "obb" else res[0].boxes) is not None
+    finally:
+        file.unlink(missing_ok=True)
+
+
+def test_autobackend_augment_unsupported_task():
+    """Verify AutoBackend.forward(augment=True) gracefully falls back to single-scale for unsupported tasks."""
+    from ultralytics.nn.autobackend import AutoBackend
+
+    file = Path(YOLO("yolo11n-seg.yaml", verbose=False).export(format="onnx", imgsz=64, dynamic=True, simplify=False))
+    try:
+        model = AutoBackend(file)
+        im = torch.zeros(1, 3, 64, 64)
+        plain, tta = model.forward(im, augment=False), model.forward(im, augment=True)
+        for p, t in zip(plain, tta):
+            assert p.shape == t.shape, "segment must fall back to single-scale (same output shapes)"
+    finally:
+        file.unlink(missing_ok=True)
+
+
 def test_model_methods():
     """Test various methods and properties of the YOLO model to ensure correct functionality."""
     model = YOLO(MODEL)
