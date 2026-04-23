@@ -43,13 +43,15 @@ def test_model_forward():
 
 
 def test_resolve_tta():
-    """`resolve_tta` normalizes bool/None aliases and passes custom recipes through unchanged."""
+    """`resolve_tta` normalizes bool/None aliases and reorders custom recipes by descending scale."""
     from ultralytics.utils.torch_utils import TTA_DEFAULT, resolve_tta
 
     assert resolve_tta(False) is None and resolve_tta(None) is None, "falsy values must disable TTA"
     assert resolve_tta(True) is TTA_DEFAULT, "augment=True must alias to the default recipe"
-    custom = ([1, 0.5], [None, 3])
-    assert resolve_tta(custom) is custom, "tuple recipes must pass through unchanged"
+    s, f = resolve_tta(([0.8, 1, 1.2], [None, 3, 2]))
+    assert list(s) == [1.2, 1, 0.8] and list(f) == [2, 3, None], "ascending recipe must sort descending; flips travel"
+    s, f = resolve_tta(([1.2, 1, 0.8], [None, 3, None]))
+    assert list(s) == [1.2, 1, 0.8] and list(f) == [None, 3, None], "descending recipe must be preserved (idempotent)"
 
 
 def test_obb_augment():

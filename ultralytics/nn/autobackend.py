@@ -442,6 +442,7 @@ class AutoBackend(nn.Module):
             augment (bool | tuple | None): Test-time augmentation recipe. ``None``/``False`` disables TTA,
                 ``True`` uses the default ``([1, 0.83, 0.67], [None, 3, None])`` recipe, or pass a
                 ``(scales, flips)`` pair for custom views (flips: ``None``=no flip, ``2``=ud, ``3``=lr).
+                Views are reordered by descending scale before inference.
             visualize (bool): whether to visualize the output predictions, defaults to False
             embed (list, optional): A list of feature vectors/embeddings to return.
 

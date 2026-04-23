@@ -451,11 +451,17 @@ def resolve_tta(augment):
     """Resolve `augment` into a `(scales, flips)` recipe tuple, or `None` to disable TTA.
 
     Accepts ``None``/``False`` (off), ``True`` (default recipe), or a ``(scales, flips)`` pair
-    such as ``([1, 0.83, 0.67], [None, 3, None])`` for fully custom views.
+    such as ``([1, 0.83, 0.67], [None, 3, None])`` for fully custom views. Views are reordered
+    by descending scale (flips travel with their scales) so the YOLO clipping heuristic
+    (``y[0]`` = largest scale, ``y[-1]`` = smallest) always holds, regardless of input order.
     """
     if not augment:
         return None
-    return TTA_DEFAULT if augment is True else augment
+    if augment is True:
+        return TTA_DEFAULT
+    s, f = augment
+    order = sorted(range(len(s)), key=lambda i: -s[i])  # descending scale (stable on ties)
+    return [s[i] for i in order], [f[i] for i in order]
 
 
 def copy_attr(a, b, include=(), exclude=()):
