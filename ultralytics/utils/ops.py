@@ -187,6 +187,14 @@ def nms_rotated(boxes, scores, threshold=0.45):
     return sorted_idx[pick]
 
 
+def nms_time_scale(augment):
+    """Return the number of TTA views so NMS gets a matching per-image time budget."""
+    from ultralytics.utils.torch_utils import resolve_tta
+
+    augment = resolve_tta(augment)
+    return len(augment[0]) if augment else 1
+
+
 def non_max_suppression(
     prediction,
     conf_thres=0.25,
@@ -202,6 +210,7 @@ def non_max_suppression(
     max_wh=7680,
     in_place=True,
     rotated=False,
+    time_scale=1.0,
 ):
     """
     Perform non-maximum suppression (NMS) on a set of boxes, with support for masks and multiple labels per box.
@@ -228,6 +237,7 @@ def non_max_suppression(
         max_wh (int): The maximum box width and height in pixels.
         in_place (bool): If True, the input prediction tensor will be modified in place.
         rotated (bool): If Oriented Bounding Boxes (OBB) are being passed for NMS.
+        time_scale (float): Multiplier for the per-image NMS time budget, useful when TTA increases candidates.
 
     Returns:
         (List[torch.Tensor]): A list of length batch_size, where each element is a tensor of
@@ -258,7 +268,7 @@ def non_max_suppression(
 
     # Settings
     # min_wh = 2  # (pixels) minimum box width and height
-    time_limit = 2.0 + max_time_img * bs  # seconds to quit after
+    time_limit = (2.0 + max_time_img * bs) * time_scale  # seconds to quit after
     multi_label &= nc > 1  # multiple labels per box (adds 0.5ms/img)
 
     prediction = prediction.transpose(-1, -2)  # shape(1,84,6300) to shape(1,6300,84)

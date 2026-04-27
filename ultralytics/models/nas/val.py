@@ -47,4 +47,5 @@ class NASValidator(DetectionValidator):
             agnostic=self.args.single_cls or self.args.agnostic_nms,
             max_det=self.args.max_det,
             max_time_img=0.5,
+            time_scale=ops.nms_time_scale(getattr(self.args, "augment", None)),
         )

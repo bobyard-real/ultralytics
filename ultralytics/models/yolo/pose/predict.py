@@ -40,6 +40,7 @@ class PosePredictor(DetectionPredictor):
             max_det=self.args.max_det,
             classes=self.args.classes,
             nc=len(self.model.names),
+            time_scale=ops.nms_time_scale(getattr(self.args, "augment", None)),
         )
 
         if not isinstance(orig_imgs, list):  # input images are a torch.Tensor, not a list
