@@ -38,7 +38,7 @@ class OBBPredictor(DetectionPredictor):
             nc=len(self.model.names),
             classes=self.args.classes,
             rotated=True,
-            time_scale=ops.nms_time_scale(getattr(self.args, "augment", None)),
+            warn_time_limit=not bool(getattr(self.args, "augment", None)),
         )
 
         if not isinstance(orig_imgs, list):  # input images are a torch.Tensor, not a list

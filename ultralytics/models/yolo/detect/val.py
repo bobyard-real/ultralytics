@@ -99,7 +99,7 @@ class DetectionValidator(BaseValidator):
             multi_label=True,
             agnostic=self.args.single_cls or self.args.agnostic_nms,
             max_det=self.args.max_det,
-            time_scale=ops.nms_time_scale(getattr(self.args, "augment", None)),
+            warn_time_limit=not bool(getattr(self.args, "augment", None)),
         )
 
     def _prepare_batch(self, si, batch):
