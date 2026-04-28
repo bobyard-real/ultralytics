@@ -35,7 +35,7 @@ class SegmentationPredictor(DetectionPredictor):
             max_det=self.args.max_det,
             nc=len(self.model.names),
             classes=self.args.classes,
-            time_scale=ops.nms_time_scale(getattr(self.args, "augment", None)),
+            warn_time_limit=not bool(getattr(self.args, "augment", None)),
         )
 
         if not isinstance(orig_imgs, list):  # input images are a torch.Tensor, not a list

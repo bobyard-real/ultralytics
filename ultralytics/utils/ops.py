@@ -187,14 +187,6 @@ def nms_rotated(boxes, scores, threshold=0.45):
     return sorted_idx[pick]
 
 
-def nms_time_scale(augment):
-    """Return the number of TTA views so NMS gets a matching per-image time budget."""
-    from ultralytics.utils.torch_utils import resolve_tta
-
-    augment = resolve_tta(augment)
-    return len(augment[0]) if augment else 1
-
-
 def non_max_suppression(
     prediction,
     conf_thres=0.25,

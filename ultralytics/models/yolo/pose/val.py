@@ -72,7 +72,7 @@ class PoseValidator(DetectionValidator):
             agnostic=self.args.single_cls or self.args.agnostic_nms,
             max_det=self.args.max_det,
             nc=self.nc,
-            time_scale=ops.nms_time_scale(getattr(self.args, "augment", None)),
+            warn_time_limit=not bool(getattr(self.args, "augment", None)),
         )
 
     def init_metrics(self, model):
